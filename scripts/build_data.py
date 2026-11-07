@@ -80,18 +80,6 @@ def parse_jsonstat(js):
         return {c: i for i, c in enumerate(idx)} if isinstance(idx, list) else idx
 
     pos = {d: index_of(d) for d in ids}
-    fixed = {}
-    for d, n in zip(ids, sizes):
-        if d in ("geo", "time"):
-            continue
-        if n == 1:
-            fixed[d] = 0
-        else:
-            pick = [c for c in pos[d] if c in PREFERRED]
-            if not pick:
-                raise ValueError(f"dimension {d} has {n} categories {list(pos[d])[:8]}; add a filter")
-            fixed[d] = pos[d][pick[0]]
-            print(f"  dimension {d}: using {pick[0]}")
     strides, s = [], 1
     for n in reversed(sizes):
         strides.append(s)
@@ -99,6 +87,25 @@ def parse_jsonstat(js):
     strides = list(reversed(strides))
     values = js["value"]
     getv = (lambda k: values.get(str(k))) if isinstance(values, dict) else (lambda k: values[k] if k < len(values) else None)
+    keys = ([int(k) for k, v in values.items() if v is not None] if isinstance(values, dict)
+            else [k for k, v in enumerate(values) if v is not None])
+
+    # For a dimension with several categories, use the one that actually holds the data
+    # (most non-empty values); ties go to the usual "total" codes.
+    fixed = {}
+    for di, (d, n) in enumerate(zip(ids, sizes)):
+        if d in ("geo", "time"):
+            continue
+        if n == 1:
+            fixed[d] = 0
+            continue
+        counts = defaultdict(int)
+        for k in keys:
+            counts[(k // strides[di]) % n] += 1
+        code_of = {i: c for c, i in pos[d].items()}
+        best = max(counts, key=lambda i: (counts[i], code_of[i] in PREFERRED)) if counts else 0
+        fixed[d] = best
+        print(f"  dimension {d}: using {code_of[best]} ({counts[best]} values; options: {', '.join(list(pos[d])[:6])})")
 
     out = defaultdict(dict)
     for geo, gi in pos["geo"].items():
@@ -143,7 +150,7 @@ def latest(series, min_regions=150):
 
 def build_indicators():
     le_year, le = latest(eurostat("demo_r_mlifexp", sex="T", age="Y_LT1", unit="YR"))
-    p65_year, p65 = latest(eurostat("demo_r_pjanind2", indic_de="PC_Y65_MAX"))
+    p65_year, p65 = latest(eurostat("demo_r_pjanind2", indic_de="PC_Y65_MAX", unit="PC"))
     pop_year, pop = latest(eurostat("demo_r_d2jan", sex="T", age="TOTAL", unit="NR"))
     regions = {}
     for geo in sorted(set(le) | set(p65)):
