@@ -1,0 +1,64 @@
+name: Build data & deploy maps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 1 * *"   # refresh once a month (new Eurostat years, new E-OBS versions)
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - run: pip install -r scripts/requirements.txt
+
+      - name: Eurostat — life expectancy, 65+ share, population (NUTS 2)
+        run: python scripts/build_data.py eurostat
+
+      - name: E-OBS — 10-year daily maximum temperature per NUTS 2 region
+        run: python scripts/build_data.py eobs
+
+      - name: Summary
+        run: |
+          python - <<'EOF'
+          import json
+          i = json.load(open("data/indicators.json")); t = json.load(open("data/temperature.json"))
+          print("indicators:", len(i["regions"]), "regions, years", i["years"])
+          print("temperature:", len(t["regions"]), "regions, period", t["period"], "file", t["file"])
+          for k in ["ES61", "ITF3", "DE30", "FI1D"]:
+              print(k, i["regions"].get(k), t["regions"].get(k))
+          EOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
